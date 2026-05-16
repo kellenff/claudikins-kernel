@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-05-16
+
+### Fixed
+
+- `merge-gate.sh` BSD grep incompatibility: replaced `grep -P` (PCRE, GNU-only) with portable extraction. Hook now prefers `ripgrep` (`rg -qP` / `rg -oP`) when available and falls back to `grep -qE` + `sed -nE` with POSIX character classes (`[[:space:]]`). Resolves "grep: invalid option -- P" on macOS.
+
+### Added
+
+- `## Tool Use Protocol` section in all 16 plugin components (4 commands, 4 skills, 8 agents): instructs each component to prefer the tool-executor MCP (`search_tools` → `get_tool_schema` → `execute_code`) for capabilities beyond basic file/shell ops, and gracefully fall back to Read/Grep/Glob/Bash/Edit/Write otherwise.
+- `CLAUDE.md` at repo root: project guidance for future Claude Code sessions covering the four-stage pipeline (outline → execute → verify → ship), agent roster, skill pairings, hook gotchas, editing conventions, and a provenance warning about upstream README/manifest claims.
+- `hooks/git-branch-guard.sh`: `git diff --stat` admitted to the safe-command allowlist for inspect-only diff summaries.
+
 ## [1.2.0] - 2026-01-21
 
 ### Added

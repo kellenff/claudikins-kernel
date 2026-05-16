@@ -51,6 +51,7 @@ fi
 #   add        - Stage changes
 #   status     - Check working tree state
 #   diff       - View changes
+#   diff --stat - View changes
 #   log        - View history
 #   show       - View commits/objects
 #   ls-files   - List tracked files
@@ -90,7 +91,7 @@ case "$GIT_SUBCOMMAND" in
         echo "" >&2
         echo "During claudikins-kernel:execute, only safe git operations are allowed:" >&2
         echo "  - git add, git commit (modify your work)" >&2
-        echo "  - git status, git diff, git log, git show (inspect state)" >&2
+        echo "  - git status, git diff, git diff --stat, git log, git show (inspect state)" >&2
         echo "  - git ls-files, git check-ignore (query files)" >&2
         echo "  - git rev-parse, git symbolic-ref (query refs)" >&2
         echo "  - git config --get/--list (read config)" >&2

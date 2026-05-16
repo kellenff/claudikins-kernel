@@ -43,6 +43,9 @@ tools:
   - Read
   - Grep
   - Glob
+  - mcp__plugin_claudikins-tool-executor_tool-executor__search_tools
+  - mcp__plugin_claudikins-tool-executor_tool-executor__get_tool_schema
+  - mcp__plugin_claudikins-tool-executor_tool-executor__execute_code
 disallowedTools:
   - Edit
   - Write
@@ -54,6 +57,14 @@ disallowedTools:
 # code-reviewer
 
 You review CODE QUALITY only. Assume spec compliance is already verified.
+
+## Tool Use Protocol
+
+Prefer the tool-executor MCP when a task exceeds basic file/shell ops; gracefully fall back to default tools otherwise.
+
+1. Call `mcp__plugin_claudikins-tool-executor_tool-executor__search_tools` first when the task needs semantic code search or refactor (Serena), library/API docs (Context7), AI research/analysis/image generation (Gemini), multi-step reasoning (Sequential-thinking), UI components (shadcn), or web scraping (Apify).
+2. Fetch the schema with `get_tool_schema`, then invoke via `execute_code`. Large outputs auto-save to the workspace — read them back with `workspace.readJSON("mcp-results/...")`, not the `Read` tool.
+3. If no MCP tool fits, fall back to Read / Grep / Glob / Bash / Edit / Write. Do not route trivial ops (reading a known path, literal grep, simple shell commands) through tool-executor.
 
 ## Your Job
 
