@@ -31,7 +31,7 @@ Aggregate per-Bash-tool latency (sum of `git-branch-guard.sh` + `sanitize-bash.s
 
 #### Post-change latency baseline (after inlining)
 
-Same methodology (30-invocation sample, macOS Apple Silicon, Node 24, nearest-rank percentiles, `CLAUDE_HOOK_INPUT`-via-env to skip the parser CLI's stdin-timeout path), captured 2026-05-17 post-inlining:
+Same methodology as the pre-change baseline (30-invocation sample, macOS Apple Silicon, Node 24, nearest-rank percentiles, `CLAUDE_HOOK_INPUT`-via-env to skip the parser CLI's stdin-timeout path), captured 2026-05-17 post-inlining. **Note:** the pre-change baseline was recorded prose-only — no measurement script was preserved at the time — so "same methodology" is best-effort, not byte-for-byte reproducible.
 
 | Metric | Value    |
 | ------ | -------- |
@@ -46,7 +46,7 @@ SC-11 holds: new p95 93.9 ms ≤ baseline_max + 4 = 152.6 ms (58.7 ms headroom).
 
 ### Deferred work
 
-- **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** Estimated ~3× speedup of the aggregate hook chain (~40-50 ms vs current ~143 ms p50). Out of scope for this release because the hygiene goal (eliminating `parser/node_modules/`) and the perf goal share no scaffolding. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.
+- **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** A Go port targeting ~40-50 ms aggregate latency would now be ~1.7× over the post-change p50 baseline (86.5 ms / p95 93.9 ms), down from the ~3× projection against the original ~143 ms p50 baseline. The hygiene change alone delivered ~36% of the Go port's projected speedup as a side effect of removing the CJS `createRequire` / `node_modules` resolution path. The Go port remains out of scope for this release because the hygiene goal and the perf goal share no scaffolding; whether the smaller remaining headroom still warrants the rewrite is a reassessment for the November review. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.
 
 ## [1.3.0] - 2026-05-17
 
