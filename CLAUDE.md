@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Where possible, skills and commands should allow the following tools:
 
 ```yaml
-  - mcp__plugin_claudikins-tool-executor_tool-executor__search_tools
-  - mcp__plugin_claudikins-tool-executor_tool-executor__get_tool_schema
-  - mcp__plugin_claudikins-tool-executor_tool-executor__execute_code
+- mcp__plugin_claudikins-tool-executor_tool-executor__search_tools
+- mcp__plugin_claudikins-tool-executor_tool-executor__get_tool_schema
+- mcp__plugin_claudikins-tool-executor_tool-executor__execute_code
 ```
 
 ## What this repo is
@@ -26,22 +26,29 @@ Each stage is a slash command (`claudikins-kernel:<stage>`) backed by purpose-bu
 - Do not propagate README content into commits, docs, or PR descriptions.
 - When in doubt about a file's intent, read the file itself; ignore the README.
 
-## There are no build/test/lint commands
+## Test commands
 
-This is a pure markdown + Bash plugin. To exercise it, install it as a Claude Code plugin and invoke the commands from another project. The hook scripts under `hooks/` are POSIX-ish Bash that the Claude Code runtime executes — they have no test harness in this repo.
-
-Manual smoke checks you can run locally:
+The plugin is markdown + Bash + a single Node CLI (`parser/cli.mjs`, vendored `shell-quote`). There is one canonical test runner:
 
 ```bash
-# Validate hooks.json parses
-jq . hooks/hooks.json
-
-# Validate plugin manifest
-jq . .claude-plugin/plugin.json
-
-# Shellcheck every hook script
-shellcheck hooks/*.sh
+tests/run.sh
 ```
+
+This runs:
+
+- `shellcheck` across all hook and test scripts
+- `node --test tests/parser/cli.test.mjs` — 47 parser unit tests
+- `tests/cli-corpus-smoke.sh` — 87 corpus assertions against the parser CLI
+- `tests/hooks/test-*.sh` — 323 integration tests across the four gating hooks
+- `tools/check-shell-quote-version.sh` — upstream drift check (warning, not failure)
+
+Expected duration: ~7 seconds on a 2024-era macOS laptop. Exit 0 = all HARD checks passed; exit non-zero = at least one HARD step failed (drift is SOFT).
+
+Smoke checks that remain manually invocable:
+
+- `jq . hooks/hooks.json`
+- `jq . .claude-plugin/plugin.json`
+- `shellcheck hooks/*.sh` (subset of what `tests/run.sh` runs)
 
 ## Architecture: how the four commands fit together
 
@@ -89,13 +96,70 @@ Each command auto-loads a methodology skill from `skills/`:
 `hooks/hooks.json` wires shell scripts in `hooks/` to Claude Code lifecycle events. Important patterns:
 
 - **`git-branch-guard.sh`** is an **allowlist**, not a blocklist — only specific safe `git` subcommands pass through. New git operations require adding them here, not bypassing.
-- **`sanitize-bash.sh`** uses `{"decision": "approve", "updatedInput": ...}` to rewrite commands; it does not use `"allow"` (invalid value, see CHANGELOG 1.1.1).
+- **`sanitize-bash.sh`** rewrites use `{"decision": "approve", "updatedInput": {"command": ...}}` (the prior `decision: allow` branch was a long-standing latent bug; fixed via the parser-backed rewrite).
 - **`verify-gate.sh`** writes to stderr — Stop hooks do **not** support `hookSpecificOutput` JSON.
 - **babyclaude Stop hook** uses `{"ok": true|false}` response shape, _not_ `{"decision": "allow|block"}` (see CHANGELOG 1.1.2).
 - **`create-task-branch.sh`** (SubagentStart for `babyclaude`) creates an isolated worktree; without it, parallel babyclaude agents collide on the same working directory.
 - **`preserve-state.sh`** (PreCompact) must always emit valid JSON, including the no-op case.
 
 When adding a hook, register it in `hooks/hooks.json` under the right event and matcher; the runtime will not auto-discover scripts.
+
+## Parser-backed gating hooks
+
+### Architecture
+
+All four gating hooks (`git-branch-guard.sh`, `block-git-commands.sh`, `merge-gate.sh`, `sanitize-bash.sh`) call the parser CLI to tokenise commands; per-hook policy is applied against parsed `commands[]` arrays instead of regex on the raw string. The parser is responsible for lexical correctness (wrapper forms, command substitution, here-docs, redirections, eval/source, var-as-command, shell keywords, meta-commands); hooks are responsible for policy (which basenames are allowed at this phase).
+
+### Parser CLI
+
+`parser/cli.mjs` is ~400 LOC of ESM in a single file. It reads a JSON envelope on stdin (with a 500ms timeout falling back to `CLAUDE_HOOK_INPUT`) and emits a JSON verdict on stdout. It always exits `0` for a well-formed verdict — whether the verdict is `ok` or `reject`. Exit code `1` is reserved for internal failure (missing module, malformed internal state, unhandled exception); hook shims that wrap the CLI treat exit `1` as a fail-closed BLOCK.
+
+### Schema
+
+The output envelope:
+
+| Field           | Value                                                                                                                                                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version`       | `1`                                                                                                                                                                                                                                  |
+| `verdict`       | `"ok"` or `"reject"`                                                                                                                                                                                                                 |
+| `commands`      | array of `{basename, argv}` objects, left-to-right                                                                                                                                                                                   |
+| `reject_reason` | present only on reject; one of `wrapper_form_$(`, `wrapper_form_redirect_<`, `wrapper_form_subshell`, `meta_command_<name>`, `shell_keyword_<name>`, `argv_wrapper_substring`, `var_as_command`, `no_commands`, `malformed_input`, … |
+
+### Source of truth
+
+`parser/GRAMMAR.md` documents every rule the CLI applies. The CLI implements that doc; **do not edit the CLI without updating the doc, and vice versa.** Discrepancies are resolved in favour of the document.
+
+### Vendoring
+
+`shell-quote@1.8.3` lives at `parser/node_modules/shell-quote/`, pinned, MIT-licensed, ~30KB. There is no runtime `npm install` — the dependency is committed. `parser/VENDORED.md` records the SHA-256 hash and the update procedure. `tools/check-shell-quote-version.sh` checks upstream drift against the npm registry; it is **warning-only and not a CI failure** — drift is a maintenance signal, not a security failure.
+
+### Hook overhead
+
+**Aggregate per-Bash-tool latency** (sum of `git-branch-guard.sh` + `sanitize-bash.sh` + `merge-gate.sh` per `hooks/hooks.json:103-122` PreToolUse:Bash chain), 30-invocation sample on macOS Apple Silicon / Node 24:
+
+| Metric | Value    |
+| ------ | -------- |
+| min    | 134.0 ms |
+| p50    | 142.9 ms |
+| p95    | 147.2 ms |
+| p99    | 148.6 ms |
+| max    | 148.6 ms |
+| mean   | 142.6 ms |
+
+Re-measure if the parser CLI is rewritten or `shell-quote` is bumped. If aggregate p95 exceeds ~200 ms, consider Approach C (long-running daemon — schema versioning at `version: 1` is in place for this).
+
+### R-13 limitation
+
+Commands whose arguments **literally contain** shell metacharacter sequences (`$(`, backticks, `<<`) — e.g. `git log --grep='$(date)'` searching commit messages for the literal string `$(date)` — are blocked by the argv-level wrapper substring scan. **This is by design.** Quote-tracking heuristics are precisely what real-world bypass attempts exploit; we choose the strict rule. Such searches must be performed outside gated phases (e.g. an interactive shell without the hook active, or a script that writes results to a file you then consume).
+
+### Fail-closed posture
+
+If the parser CLI is missing, crashes, returns malformed JSON, or returns an unexpected verdict, **every gating hook blocks**:
+
+- stderr-based hooks (`git-branch-guard.sh`, `block-git-commands.sh`, `merge-gate.sh`) emit `exit 2`.
+- `sanitize-bash.sh` emits `{"decision": "block", ...}`.
+
+A reject verdict with exit 0 is normal operation; a reject verdict with exit 1 is a bug.
 
 ## Conventions for editing this plugin
 
@@ -104,3 +168,4 @@ When adding a hook, register it in `hooks/hooks.json` under the right event and 
 - **EXECUTION_TASKS markers** in plan output must remain machine-parseable — `execute` reads tasks via the table between `<!-- EXECUTION_TASKS_START -->` and `<!-- EXECUTION_TASKS_END -->`.
 - **Worktree paths** must be passed to spawned babyclaude agents via `cwd: worktreePath`; omitting this re-introduces the branch-collision bug fixed in 1.2.0.
 - **CHANGELOG** uses Keep a Changelog 1.1.0 + SemVer. Bump `plugin.json` version alongside.
+- **Parser changes** must update `parser/GRAMMAR.md` AND `parser/cli.mjs` AND add a regression test to `tests/parser/cli.test.mjs`. The bypass corpus (`tests/fixtures/bypass-corpus-parser.txt`) is the spec for what the parser must reject; the hook corpus (`tests/fixtures/bypass-corpus-hook.txt`) is the spec for what hook layers must catch. Adding a new bypass is: add a corpus line first, watch the test fail, then patch parser or hook.
