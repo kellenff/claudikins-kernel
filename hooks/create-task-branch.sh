@@ -22,10 +22,11 @@ INPUT=$(cat)
 # Extract agent name
 AGENT_NAME=$(echo "$INPUT" | jq -r '.agent_name // ""')
 
-# Only act on babyclaude spawns
-if [ "$AGENT_NAME" != "babyclaude" ]; then
-    exit 0
-fi
+# Only act on babyclaude spawns (accept either bare or plugin-namespaced form)
+case "$AGENT_NAME" in
+    babyclaude|claudikins-kernel:babyclaude) ;;
+    *) exit 0 ;;
+esac
 
 # Extract task info from prompt (passed by execute command)
 # Format expected: TASK_ID: <id> TASK_SLUG: <slug>

@@ -78,7 +78,7 @@
         ]
       },
       {
-        "matcher": "babyclaude",
+        "matcher": "(claudikins-kernel:)?babyclaude",
         "hooks": [
           {
             "type": "command",
