@@ -29,6 +29,21 @@ Aggregate per-Bash-tool latency (sum of `git-branch-guard.sh` + `sanitize-bash.s
 | max    | 148.6 ms |
 | mean   | 142.6 ms |
 
+#### Post-change latency baseline (after inlining)
+
+Same methodology (30-invocation sample, macOS Apple Silicon, Node 24, nearest-rank percentiles, `CLAUDE_HOOK_INPUT`-via-env to skip the parser CLI's stdin-timeout path), captured 2026-05-17 post-inlining:
+
+| Metric | Value    |
+| ------ | -------- |
+| min    | 83.7 ms  |
+| p50    | 86.5 ms  |
+| p95    | 93.9 ms  |
+| p99    | 110.2 ms |
+| max    | 110.2 ms |
+| mean   | 87.7 ms  |
+
+SC-11 holds: new p95 93.9 ms ≤ baseline_max + 4 = 152.6 ms (58.7 ms headroom). Delta vs pre-change: **53.3 ms faster p95** (~36% reduction), driven by eliminating the `node_modules/` resolution and ESM-loader walk for `shell-quote` on every Bash-tool invocation. Mean drops from 142.6 → 87.7 ms (54.9 ms faster).
+
 ### Deferred work
 
 - **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** Estimated ~3× speedup of the aggregate hook chain (~40-50 ms vs current ~143 ms p50). Out of scope for this release because the hygiene goal (eliminating `parser/node_modules/`) and the perf goal share no scaffolding. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.

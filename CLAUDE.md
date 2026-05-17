@@ -141,12 +141,12 @@ The output envelope:
 
 | Metric | Value    |
 | ------ | -------- |
-| min    | 134.0 ms |
-| p50    | 142.9 ms |
-| p95    | 147.2 ms |
-| p99    | 148.6 ms |
-| max    | 148.6 ms |
-| mean   | 142.6 ms |
+| min    | 83.7 ms  |
+| p50    | 86.5 ms  |
+| p95    | 93.9 ms  |
+| p99    | 110.2 ms |
+| max    | 110.2 ms |
+| mean   | 87.7 ms  |
 
 Re-measure if the parser CLI is rewritten or `shell-quote` is bumped. If aggregate p95 exceeds ~200 ms, consider Approach C (long-running daemon — schema versioning at `version: 1` is in place for this).
 
