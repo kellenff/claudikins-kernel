@@ -1,105 +1,129 @@
 #!/bin/bash
-# git-branch-guard.sh - PreToolUse hook for /execute
-# Blocks dangerous git operations during task execution.
+# git-branch-guard.sh — PreToolUse hook for /execute
+# Parser-backed allowlist of git subcommands; rejects others by exit 2.
 #
 # Matcher: Bash (only checks bash commands)
 # Exit codes:
 #   0 - Command allowed
-#   2 - Command blocked (dangerous git operation)
+#   2 - Command blocked (parser reject OR disallowed git subcommand)
+#
+# Implementation: thin shim over parser/cli.mjs. The parser does all the
+# lexical bypass detection (wrapper shells, command substitution, eval,
+# var-as-command, shell keywords, etc.). This shim then walks the parsed
+# commands[] and applies the git-subcommand allowlist policy.
+#
+# Fails closed: any internal failure (parser missing, parser crash,
+# malformed CLI output) → exit 2.
 
 set -euo pipefail
 
-# Get project directory
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
-CLAUDE_DIR="$PROJECT_DIR/.claude"
-STATE_FILE="$CLAUDE_DIR/execute-state.json"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+STATE_FILE="$PROJECT_DIR/.claude/execute-state.json"
+CLI="$PLUGIN_ROOT/parser/cli.mjs"
 
-# Read input JSON from stdin
+# Allowlist of git subcommands safe during task execution.
+ALLOWED_GIT_SUBCMDS="add status diff log show ls-files check-ignore rev-parse symbolic-ref commit"
+# Read-only git config flags.
+ALLOWED_CONFIG_FLAGS="--get --list --get-all --get-regexp"
+
 INPUT=$(cat)
 
-# Extract tool name
+# Only enforce on Bash tool calls.
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""')
-
-# Only check Bash tool
 if [ "$TOOL_NAME" != "Bash" ]; then
     exit 0
 fi
 
-# Check if we're in an active execution session
+# Only enforce during executing state.
 if [ ! -f "$STATE_FILE" ]; then
-    exit 0  # No active session, allow all
+    exit 0
 fi
-
 STATUS=$(jq -r '.status // ""' "$STATE_FILE" 2>/dev/null || echo "")
 if [ "$STATUS" != "executing" ]; then
-    exit 0  # Not actively executing, allow all
-fi
-
-# Extract the command
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-
-# Skip if not a git command
-if ! echo "$COMMAND" | grep -qE '^\s*git\s'; then
     exit 0
 fi
 
-# ALLOWLIST APPROACH - Only permit known-safe git operations
-# Everything else is blocked by default. This is safer than blocklisting
-# because new dangerous commands (like cherry-pick) can't slip through.
+# Fail closed if the parser is missing or unreadable.
+if [ ! -f "$CLI" ]; then
+    echo "BLOCKED: parser CLI not found at $CLI (fail-closed)" >&2
+    exit 2
+fi
 
-# Safe git subcommands that agents may use during task execution:
-#   add        - Stage changes
-#   status     - Check working tree state
-#   diff       - View changes
-#   diff --stat - View changes
-#   log        - View history
-#   show       - View commits/objects
-#   ls-files   - List tracked files
-#   check-ignore - Check gitignore rules
-#   rev-parse  - Parse revisions
-#   symbolic-ref - Read/modify symbolic refs
-#   config     - Read config (--get, --list only)
-#   commit     - Commit staged changes
+# Run the parser. The parser exits 0 for both ok and reject verdicts;
+# exit 1 signals an internal CLI failure (e.g. no input). Either way,
+# a missing/empty output is treated as fail-closed.
+CLI_OUTPUT=$(printf '%s' "$INPUT" | node "$CLI" 2>/dev/null) || {
+    echo "BLOCKED: parser CLI internal failure (fail-closed)" >&2
+    exit 2
+}
 
-# Extract the git subcommand
-GIT_SUBCOMMAND=$(echo "$COMMAND" | sed -n 's/.*git\s\+\([a-z-]\+\).*/\1/p')
+if [ -z "$CLI_OUTPUT" ]; then
+    echo "BLOCKED: parser CLI returned no output (fail-closed)" >&2
+    exit 2
+fi
 
-# Allowlist of safe git subcommands
-case "$GIT_SUBCOMMAND" in
-    add|status|diff|log|show|ls-files|check-ignore|rev-parse|symbolic-ref|commit)
-        # These are safe - allow them
-        exit 0
-        ;;
-    config)
-        # git config is safe only for reading (--get, --list, --get-all, --get-regexp)
-        if echo "$COMMAND" | grep -qE 'git\s+config\s+(--get|--list|--get-all|--get-regexp)'; then
-            exit 0
+VERDICT=$(echo "$CLI_OUTPUT" | jq -r '.verdict // "ERROR"' 2>/dev/null || echo "ERROR")
+
+# Parser rejected the input → block.
+if [ "$VERDICT" = "reject" ]; then
+    REASON=$(echo "$CLI_OUTPUT" | jq -r '.reject_reason // "unknown"')
+    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // .toolInput.command // ""')
+    echo "BLOCKED: parser rejected command — reason: $REASON" >&2
+    echo "Command: $COMMAND" >&2
+    exit 2
+fi
+
+if [ "$VERDICT" != "ok" ]; then
+    echo "BLOCKED: unexpected parser verdict: $VERDICT (fail-closed)" >&2
+    exit 2
+fi
+
+# Parser verdict ok — walk commands[] and enforce git allowlist.
+BLOCK_REASON=""
+BLOCKED_SUBCMD=""
+
+while IFS= read -r cmd; do
+    BASENAME=$(echo "$cmd" | jq -r '.basename // ""')
+    if [ "$BASENAME" != "git" ]; then
+        continue   # non-git in command position is out of scope here
+    fi
+
+    SUBCMD=$(echo "$cmd" | jq -r '.argv[1] // ""')
+
+    # Allowlisted plain subcommand?
+    if echo " $ALLOWED_GIT_SUBCMDS " | grep -q " $SUBCMD "; then
+        continue
+    fi
+
+    # Special-case git config — allow only read flags.
+    if [ "$SUBCMD" = "config" ]; then
+        FLAG=$(echo "$cmd" | jq -r '.argv[2] // ""')
+        if echo " $ALLOWED_CONFIG_FLAGS " | grep -q " $FLAG "; then
+            continue
         fi
-        echo "BLOCKED: git config write operation during task execution" >&2
-        echo "" >&2
-        echo "Command: $COMMAND" >&2
-        echo "" >&2
-        echo "Only read operations allowed: git config --get, git config --list" >&2
-        exit 2
-        ;;
-    *)
-        # Everything else is blocked
-        echo "BLOCKED: Unsafe git operation during task execution" >&2
-        echo "" >&2
-        echo "Command: $COMMAND" >&2
-        echo "Subcommand: $GIT_SUBCOMMAND" >&2
-        echo "" >&2
-        echo "During claudikins-kernel:execute, only safe git operations are allowed:" >&2
-        echo "  - git add, git commit (modify your work)" >&2
-        echo "  - git status, git diff, git diff --stat, git log, git show (inspect state)" >&2
-        echo "  - git ls-files, git check-ignore (query files)" >&2
-        echo "  - git rev-parse, git symbolic-ref (query refs)" >&2
-        echo "  - git config --get/--list (read config)" >&2
-        echo "" >&2
-        echo "Blocked operations include: checkout, switch, reset, clean, push," >&2
-        echo "pull, fetch, rebase, merge, stash, cherry-pick, revert, tag, branch -d" >&2
-        echo "" >&2
-        echo "If you need these operations, complete your task first." >&2
-        exit 2
-        ;;
-esac
+        BLOCKED_SUBCMD="config $FLAG"
+        BLOCK_REASON="git config write operation (only read flags allowed: $ALLOWED_CONFIG_FLAGS)"
+        break
+    fi
+
+    BLOCKED_SUBCMD="$SUBCMD"
+    BLOCK_REASON="git subcommand '$SUBCMD' not in allowlist"
+    break
+done < <(echo "$CLI_OUTPUT" | jq -c '.commands[]')
+
+if [ -n "$BLOCK_REASON" ]; then
+    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // .toolInput.command // ""')
+    echo "BLOCKED: $BLOCK_REASON" >&2
+    echo "" >&2
+    echo "Command: $COMMAND" >&2
+    echo "Subcommand: $BLOCKED_SUBCMD" >&2
+    echo "" >&2
+    echo "Allowed git subcommands: $ALLOWED_GIT_SUBCMDS" >&2
+    echo "Read-only git config flags: $ALLOWED_CONFIG_FLAGS" >&2
+    echo "" >&2
+    echo "If you need other git operations, complete your task first." >&2
+    exit 2
+fi
+
+exit 0

@@ -1,89 +1,106 @@
 #!/bin/bash
-# merge-gate.sh - PreToolUse hook for Bash
-# Blocks "git merge" unless review verdict exists with PASS status.
+# merge-gate.sh - PreToolUse hook for Bash.
+# Blocks "git merge" of a task branch unless a passing review verdict exists.
 # This is the HARD GATE that prevents skipping reviews even under context drift.
+#
+# Detection of "is this a git merge command" is parser-backed (calls
+# parser/cli.mjs). That walks all command positions and yields a clean
+# basename + argv per command, so chained forms (`cd repo && git merge X`)
+# and command substitution / wrapper forms are handled uniformly.
+#
+# Verdict-file lookup and task-id slug extraction remain string-based on the
+# branch name - those are intentional, the branch name is a stable identifier.
 #
 # Matcher: Bash
 # Exit codes:
 #   0 - Merge allowed (review passed) or not a merge command
-#   2 - Merge blocked (no review or review failed)
+#   2 - Merge blocked (no review, review failed, parser internal failure)
 
-# Tool detection: prefer ripgrep (PCRE2, cross-platform) when available;
-# otherwise fall back to BSD/GNU-portable grep -E + sed -nE. Never use grep -P
-# (PCRE) directly - BSD grep on macOS does not support it.
-if command -v rg >/dev/null 2>&1; then
-    HAVE_RG=1
-else
-    HAVE_RG=0
-fi
+set -euo pipefail
 
-# match_pcre PCRE_PATTERN ERE_PATTERN INPUT
-#   Returns 0 if INPUT matches the pattern, 1 otherwise.
-match_pcre() {
-    if [ "$HAVE_RG" = "1" ]; then
-        printf '%s' "$3" | rg -qP "$1"
-    else
-        printf '%s' "$3" | grep -qE "$2"
-    fi
-}
-
-# extract_pcre PCRE_PATTERN_WITH_K ERE_PATTERN_WITH_CAPTURE INPUT
-#   Prints the first match. PCRE uses \K to fix the match start;
-#   ERE uses a capture group (\1) consumed by sed.
-extract_pcre() {
-    if [ "$HAVE_RG" = "1" ]; then
-        printf '%s' "$3" | rg -oP "$1" | head -n1
-    else
-        printf '%s' "$3" | sed -nE "s/.*${2}.*/\1/p" | head -n1
-    fi
-}
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+CLI="$PLUGIN_ROOT/parser/cli.mjs"
 
 # Read JSON input from stdin
 INPUT=$(cat)
 
-# Extract the command
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
-
-if [ -z "$COMMAND" ]; then
+# Only inspect Bash tool calls.
+TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""')
+if [ "$TOOL_NAME" != "Bash" ]; then
     exit 0
 fi
 
-# Check if this is a git merge command
-if ! match_pcre \
-    '(^git\s+merge|[|;&]\s*git\s+merge)' \
-    '(^git[[:space:]]+merge|[|;&][[:space:]]*git[[:space:]]+merge)' \
-    "$COMMAND"; then
-    # Not a merge command - allow
-    exit 0
-fi
-
-# Extract branch name being merged (if present)
-# Patterns: "git merge branch-name", "git merge origin/branch"
-MERGE_BRANCH=$(extract_pcre \
-    'git\s+merge\s+\K[^\s;|&]+' \
-    'git[[:space:]]+merge[[:space:]]+([^[:space:];|&]+)' \
-    "$COMMAND")
-
-if [ -z "$MERGE_BRANCH" ]; then
-    echo "Cannot determine branch being merged. Merge blocked for safety." >&2
+# Run the parser. We pass the full envelope on stdin; cli.mjs reads
+# tool_input.command itself. Internal failure (exit != 0) is fail-closed.
+if ! CLI_OUTPUT=$(printf '%s' "$INPUT" | node "$CLI" 2>/dev/null); then
+    echo "MERGE BLOCKED: parser CLI internal failure (fail-closed)" >&2
     exit 2
 fi
 
-# Extract task ID from branch name
-# Format: execute/task-{id}-{slug}-{uuid}
-TASK_ID=$(extract_pcre \
-    'task-\K[^-]+' \
-    'task-([^-]+)' \
-    "$MERGE_BRANCH")
+VERDICT=$(printf '%s' "$CLI_OUTPUT" | jq -r '.verdict // "ERROR"')
 
-if [ -z "$TASK_ID" ]; then
-    # Not a task branch - might be a regular merge, allow it
-    # (Only task branches require review)
+# Parser-rejected commands (wrappers, malformed input, shell keywords, etc.)
+# fall to other hooks - merge-gate is specifically about git merge in a
+# well-formed command line. We can't safely inspect rejected forms.
+if [ "$VERDICT" != "ok" ]; then
     exit 0
 fi
 
-# Check for review verdict
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
+# Scan commands[] for any entry whose basename == "git" and argv[1] == "merge".
+MERGE_TARGET=""
+while IFS= read -r cmd; do
+    BASENAME=$(printf '%s' "$cmd" | jq -r '.basename')
+    SUBCMD=$(printf '%s' "$cmd" | jq -r '.argv[1] // ""')
+    if [ "$BASENAME" = "git" ] && [ "$SUBCMD" = "merge" ]; then
+        # First positional argument after `merge` is the branch.
+        # `git merge` may take flags before the branch; walk argv looking
+        # for the first non-flag token after "merge".
+        ARGC=$(printf '%s' "$cmd" | jq -r '.argv | length')
+        i=2
+        while [ "$i" -lt "$ARGC" ]; do
+            ARG=$(printf '%s' "$cmd" | jq -r --argjson i "$i" '.argv[$i]')
+            case "$ARG" in
+                -*)
+                    # Flag, skip.
+                    ;;
+                *)
+                    MERGE_TARGET="$ARG"
+                    break
+                    ;;
+            esac
+            i=$((i + 1))
+        done
+        break
+    fi
+done < <(printf '%s' "$CLI_OUTPUT" | jq -c '.commands[]')
+
+# No git merge in the command line - allow.
+if [ -z "$MERGE_TARGET" ]; then
+    # Edge case: `git merge` with no branch name. Original hook blocked this
+    # "for safety". Preserve that behaviour ONLY when the parser saw a git
+    # merge with no positional target.
+    HAD_MERGE=$(printf '%s' "$CLI_OUTPUT" | \
+        jq -r '[.commands[] | select(.basename == "git" and (.argv[1] // "") == "merge")] | length')
+    if [ "$HAD_MERGE" != "0" ]; then
+        echo "Cannot determine branch being merged. Merge blocked for safety." >&2
+        exit 2
+    fi
+    exit 0
+fi
+
+# Extract task ID from branch name.
+# Format: execute/task-{id}-{slug}-{uuid}
+# Branch name is a stable identifier; regex-on-string is correct here.
+TASK_ID=$(printf '%s' "$MERGE_TARGET" | sed -nE 's|^execute/task-([^-]+)-.*|\1|p')
+
+if [ -z "$TASK_ID" ]; then
+    # Not a task branch (e.g. `git merge main`). Only task branches require
+    # review.
+    exit 0
+fi
+
+# Check for review verdict.
 REVIEW_DIR="$PROJECT_DIR/.claude/reviews"
 VERDICT_FILE="$REVIEW_DIR/${TASK_ID}/verdict.json"
 
@@ -97,7 +114,7 @@ if [ ! -f "$VERDICT_FILE" ]; then
     exit 2
 fi
 
-# Check verdict status
+# Check verdict status.
 SPEC_STATUS=$(jq -r '.spec_review // "MISSING"' "$VERDICT_FILE")
 CODE_STATUS=$(jq -r '.code_review // "MISSING"' "$VERDICT_FILE")
 
@@ -121,5 +138,5 @@ if [ "$CODE_STATUS" != "PASS" ] && [ "$CODE_STATUS" != "CONCERNS_ACCEPTED" ]; th
     exit 2
 fi
 
-# Both reviews passed - allow merge
+# Both reviews passed - allow merge.
 exit 0
