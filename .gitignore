@@ -1,6 +1,9 @@
 # Local Claude state
 .claude/
 
+# Parser dependencies (inlined into parser/shell-quote-parse.mjs; nothing to install)
+parser/node_modules/
+
 # Internal docs and plans
 docs/
 
