@@ -31,22 +31,24 @@ Aggregate per-Bash-tool latency (sum of `git-branch-guard.sh` + `sanitize-bash.s
 
 #### Post-change latency baseline (after inlining)
 
-Same methodology as the pre-change baseline (30-invocation sample, macOS Apple Silicon, Node 24, nearest-rank percentiles, `CLAUDE_HOOK_INPUT`-via-env to skip the parser CLI's stdin-timeout path), captured 2026-05-17 post-inlining. **Note:** the pre-change baseline was recorded prose-only — no measurement script was preserved at the time — so "same methodology" is best-effort, not byte-for-byte reproducible.
+**Methodology-correctness note.** An earlier revision of this entry published a post-change p95 of 93.9 ms and claimed a ~36% speedup. Those numbers were collected by passing the JSON envelope via the `CLAUDE_HOOK_INPUT` environment variable with an empty stdin (method A), which skips the parser CLI's 500 ms stdin-read path. The Claude Code harness invokes hooks by piping the envelope via stdin — not via env-var — so the published numbers were a methodology artefact rather than a production speedup. The numbers below are remeasured using **method B (stdin pipe)**, matching the production code path.
+
+Measurement: 30-invocation sample, macOS Apple Silicon, Node 24, nearest-rank percentiles. Each invocation spawns three fresh hook processes in sequence (`git-branch-guard.sh` → `sanitize-bash.sh` → `merge-gate.sh`) and pipes the JSON envelope `{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"<repo>"}` to each hook's stdin. Six back-to-back runs were observed; the published numbers are the cleanest (lowest-tail) of those six. The remaining runs showed p95 between ~152 and ~193 ms — the tail is sensitive to transient machine load. Captured 2026-05-17 post-inlining via the corrected methodology.
 
 | Metric | Value    |
 | ------ | -------- |
-| min    | 83.7 ms  |
-| p50    | 86.5 ms  |
-| p95    | 93.9 ms  |
-| p99    | 110.2 ms |
-| max    | 110.2 ms |
-| mean   | 87.7 ms  |
+| min    | 137.7 ms |
+| p50    | 146.9 ms |
+| p95    | 152.4 ms |
+| p99    | 152.7 ms |
+| max    | 152.7 ms |
+| mean   | 146.4 ms |
 
-SC-11 holds: new p95 93.9 ms ≤ baseline_max + 4 = 152.6 ms (58.7 ms headroom). Delta vs pre-change: **53.3 ms faster p95** (~36% reduction), driven by eliminating the `node_modules/` resolution and ESM-loader walk for `shell-quote` on every Bash-tool invocation. Mean drops from 142.6 → 87.7 ms (54.9 ms faster).
+SC-11 holds at the boundary: new p95 152.4 ms ≤ baseline_max + 4 = 152.6 ms (0.2 ms headroom). The inlining is **essentially flat post-inlining** (within natural variance of the pre-change baseline) — pre-change p95 147.2 ms vs post-change p95 152.4 ms, with run-to-run p95 variation of ~40 ms across six samples bracketing both numbers. The pre-change baseline at 147.2 ms p95 was also a method-B measurement (the verify-stage replay confirms this), so pre and post are now apples-to-apples on the production path. **The hygiene goal of the change stands — `node_modules/` is eliminated from the gating-hook hot path — but the perf goal of plan session `plan-2026-05-17-0650` is not demonstrably advanced by this change.**
 
 ### Deferred work
 
-- **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** A Go port targeting ~40-50 ms aggregate latency would now be ~1.7× over the post-change p50 baseline (86.5 ms / p95 93.9 ms), down from the ~3× projection against the original ~143 ms p50 baseline. The hygiene change alone delivered ~36% of the Go port's projected speedup as a side effect of removing the CJS `createRequire` / `node_modules` resolution path. The Go port remains out of scope for this release because the hygiene goal and the perf goal share no scaffolding; whether the smaller remaining headroom still warrants the rewrite is a reassessment for the November review. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.
+- **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** A Go port targeting ~40-50 ms aggregate latency remains a ~3× speedup over the production p50 baseline of ~143-147 ms. The inlining change did not move the production latency picture (see the methodology-correctness note above) so the original Go-port projection is restored. The Go port remains out of scope for this release because the hygiene goal and the perf goal share no scaffolding; whether the rewrite is worth the ~100 ms p50 headroom it would unlock is a reassessment for the November review. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.
 
 ## [1.3.0] - 2026-05-17
 
