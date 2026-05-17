@@ -15,9 +15,10 @@
 //   - The `TOKEN` constant built from `Math.random()` is randomness-by-design;
 //     it prevents literal-collision attacks on object-form env results. Do not
 //     replace it with `crypto.randomUUID()` or any fixed value.
-//   - `var i` at line ~113 and the inner `parseEnvVar` closure depend on
-//     shared `var`-scope hoisting; converting to `let`/`const` silently breaks
-//     the loop-index mutation.
+//   - The `var i;` declaration inside the outer `.map()` callback of
+//     `parseInternal` and the inner `parseEnvVar` closure depend on shared
+//     `var`-scope hoisting; converting to `let`/`const` silently breaks the
+//     loop-index mutation.
 //   - All regex constants (`CONTROL`, `controlRE`, `META`, `SINGLE_QUOTE`,
 //     `DOUBLE_QUOTE`, `hash`) must remain byte-identical to upstream.
 //
