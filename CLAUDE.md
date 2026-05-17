@@ -28,7 +28,7 @@ Each stage is a slash command (`claudikins-kernel:<stage>`) backed by purpose-bu
 
 ## Test commands
 
-The plugin is markdown + Bash + a single Node CLI (`parser/cli.mjs`, vendored `shell-quote`). There is one canonical test runner:
+The plugin is markdown + Bash + a single Node CLI (`parser/cli.mjs`, with an inlined `shell-quote` parse function in `parser/shell-quote-parse.mjs`). There is one canonical test runner:
 
 ```bash
 tests/run.sh
@@ -112,7 +112,7 @@ All four gating hooks (`git-branch-guard.sh`, `block-git-commands.sh`, `merge-ga
 
 ### Parser CLI
 
-`parser/cli.mjs` is ~400 LOC of ESM in a single file. It reads a JSON envelope on stdin (with a 500ms timeout falling back to `CLAUDE_HOOK_INPUT`) and emits a JSON verdict on stdout. It always exits `0` for a well-formed verdict — whether the verdict is `ok` or `reject`. Exit code `1` is reserved for internal failure (missing module, malformed internal state, unhandled exception); hook shims that wrap the CLI treat exit `1` as a fail-closed BLOCK.
+`parser/cli.mjs` is ~400 LOC of ESM and imports the inlined `parse` function from `parser/shell-quote-parse.mjs`. It reads a JSON envelope on stdin (with a 500ms timeout falling back to `CLAUDE_HOOK_INPUT`) and emits a JSON verdict on stdout. It always exits `0` for a well-formed verdict — whether the verdict is `ok` or `reject`. Exit code `1` is reserved for internal failure (missing module, malformed internal state, unhandled exception); hook shims that wrap the CLI treat exit `1` as a fail-closed BLOCK.
 
 ### Schema
 
@@ -129,13 +129,15 @@ The output envelope:
 
 `parser/GRAMMAR.md` documents every rule the CLI applies. The CLI implements that doc; **do not edit the CLI without updating the doc, and vice versa.** Discrepancies are resolved in favour of the document.
 
-### Vendoring
+### Inlined dependency
 
-`shell-quote@1.8.3` lives at `parser/node_modules/shell-quote/`, pinned, MIT-licensed, ~30KB. There is no runtime `npm install` — the dependency is committed. `parser/VENDORED.md` records the SHA-256 hash and the update procedure. `tools/check-shell-quote-version.sh` checks upstream drift against the npm registry; it is **warning-only and not a CI failure** — drift is a maintenance signal, not a security failure.
+`parser/shell-quote-parse.mjs` is the inlined ESM `parse` function originally extracted from `shell-quote@1.8.3` (MIT-licensed). `parser/LICENSES/shell-quote-MIT.txt` preserves the upstream licence. `parser/INLINED.md` records the upstream URL, tag, commit SHA, SHA-256 of the inlined file(s), update procedure, and drift-check sources. There is no `npm install` step and no `node_modules/` tree — the parser has zero runtime dependencies beyond Node itself. `tools/check-shell-quote-version.sh` reads the pinned tag from `parser/INLINED.md` and reports upstream drift against the npm registry; it is **warning-only and always exits 0** — drift is a maintenance signal, not a CI failure.
 
 ### Hook overhead
 
 **Aggregate per-Bash-tool latency** (sum of `git-branch-guard.sh` + `sanitize-bash.sh` + `merge-gate.sh` per `hooks/hooks.json:103-122` PreToolUse:Bash chain), 30-invocation sample on macOS Apple Silicon / Node 24:
+
+<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->
 
 | Metric | Value    |
 | ------ | -------- |
