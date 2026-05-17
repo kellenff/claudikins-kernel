@@ -1,0 +1,40 @@
+# Allowlist corpus — each non-comment line is a command string that MUST
+# pass the sanitiser as-is. NO wrapper substrings, NO subshells, NO
+# env-prefix tricks, NO here-docs / here-strings, NO chaining operators.
+# See ./README.md for the contamination rule.
+
+# category: git-read-only
+git status
+git status --short
+git diff
+git diff --stat
+git diff HEAD
+git log
+git log --oneline -10
+git show HEAD
+git show HEAD:path/to/file.txt
+git ls-files
+git check-ignore .env
+git rev-parse HEAD
+git rev-parse --short HEAD
+git symbolic-ref HEAD
+
+# category: git-staging
+git add file.txt
+git add .
+git add -A
+
+# category: git-commit
+git commit -m "fix: typo"
+git commit -m "multi word message"
+
+# category: git-config
+git config --get user.email
+git config --list
+git config --get-regexp '^user\.'
+
+# category: non-git-passthrough
+ls -la
+cat file.txt
+node parser/cli.mjs
+jq . file.json
