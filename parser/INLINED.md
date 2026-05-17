@@ -9,8 +9,8 @@
 The parser CLI (`parser/cli.mjs`) imports a single `parse()` function from
 `parser/shell-quote-parse.mjs`. That file is a hand-inlined ESM copy of
 `parse.js` from the upstream `shell-quote` package at the tag above, with a
-local SAFEGUARDS comment block and an MIT attribution header. No other
-upstream files are required at runtime.
+local "Invariants — DO NOT alter" comment block and an MIT attribution
+header. No other upstream files are required at runtime.
 
 ## Inlined files
 
@@ -21,7 +21,9 @@ upstream files are required at runtime.
 
 To verify integrity:
 
-    shasum -a 256 parser/shell-quote-parse.mjs parser/LICENSES/shell-quote-MIT.txt
+```bash
+shasum -a 256 parser/shell-quote-parse.mjs parser/LICENSES/shell-quote-MIT.txt
+```
 
 ## Files no longer in repo
 
@@ -43,9 +45,9 @@ When upstream releases a new version:
 
 1.  Inspect the upstream diff:
     `https://github.com/ljharb/shell-quote/compare/v1.8.3...v<new>`
-2.  Apply the changes to `parse.js`'s function body to
+2.  Apply the upstream changes from `parse.js`'s function body into
     `parser/shell-quote-parse.mjs`. Preserve:
-    - The SAFEGUARDS comment block at the top.
+    - The "Invariants — DO NOT alter" comment block at the top.
     - The MIT attribution header.
     - The `var i` hoisting in the outer `.map()` callback (upstream uses
       `var` deliberately because the index is referenced from the inner
@@ -55,7 +57,9 @@ When upstream releases a new version:
     323 hook integration tests must pass.
 4.  Refresh both SHA-256 values:
 
+    ```bash
     shasum -a 256 parser/shell-quote-parse.mjs parser/LICENSES/shell-quote-MIT.txt
+    ```
 
 5.  Update the `Tag`, `Upstream commit SHA`, and SHA-256 table above. Fetch
     the new commit SHA via:
@@ -88,7 +92,7 @@ available at:
 Extract `package/parse.js` from the tarball and feed it through the same
 normalisation pipeline documented in the drift-check script.
 
-### Rationale
+## Rationale
 
 The plugin has no Node project root and no install step — users drop it
 into `~/.claude/plugins/` and expect commands to run immediately.

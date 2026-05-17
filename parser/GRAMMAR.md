@@ -31,16 +31,18 @@ expansion is the host shell's responsibility, not the gate's.
 
 ## 2. Parse mode
 
-The CLI invokes `shell-quote` with an **identity env shim** that preserves
-every variable reference as its literal `$NAME` form:
+The CLI invokes the inlined `parse` function (originally from
+`shell-quote@1.8.3`) with an **identity env shim** that preserves every
+variable reference as its literal `$NAME` form:
 
 ```js
-import { parse as shellQuoteParse } from "shell-quote";
+import shellQuoteParse from "./shell-quote-parse.mjs";
 const tokens = shellQuoteParse(commandString, (name) => "$" + name);
 ```
 
-That is: **identity env shim, default escape behaviour**. Pinned version:
-`shell-quote@1.8.3` (see `parser/VENDORED.md`).
+That is: **identity env shim, default escape behaviour**. The `parse`
+function is inlined from `shell-quote@1.8.3` at
+`parser/shell-quote-parse.mjs` (see `parser/INLINED.md`).
 
 ### Why the identity env shim
 
@@ -673,25 +675,26 @@ operating outcome, not an error. A reject verdict with `exit 1` is a bug.
 
 ## 15. Parse-vs-execution divergence
 
-`shell-quote` is a JavaScript approximation of bash word-splitting. It is
-**not** an interpreter and does **not** perform any of the runtime
-transformations bash applies before executing a command:
+The inlined `parse` function (originally from `shell-quote@1.8.3`) is a
+JavaScript approximation of bash word-splitting. It is **not** an
+interpreter and does **not** perform any of the runtime transformations
+bash applies before executing a command:
 
-| Bash phase                        | Performed by `shell-quote`? |
-| --------------------------------- | --------------------------- |
-| Tokenisation / word-splitting     | yes (the whole point)       |
-| Brace expansion (`{a,b,c}`)       | no                          |
-| Tilde expansion (`~`, `~user`)    | no                          |
-| Parameter expansion (`$VAR`)      | no (we explicitly disable)  |
-| Command substitution execution    | no                          |
-| Arithmetic expansion (`$((1+1))`) | no                          |
-| Process substitution execution    | no                          |
-| Pathname expansion (glob match)   | no                          |
-| Quote removal                     | partial                     |
-| Alias / function resolution       | no (shell-time only)        |
+| Bash phase                        | Performed by inlined `parse` (originally shell-quote@1.8.3)? |
+| --------------------------------- | ------------------------------------------------------------ |
+| Tokenisation / word-splitting     | yes (the whole point)                                        |
+| Brace expansion (`{a,b,c}`)       | no                                                           |
+| Tilde expansion (`~`, `~user`)    | no                                                           |
+| Parameter expansion (`$VAR`)      | no (we explicitly disable)                                   |
+| Command substitution execution    | no                                                           |
+| Arithmetic expansion (`$((1+1))`) | no                                                           |
+| Process substitution execution    | no                                                           |
+| Pathname expansion (glob match)   | no                                                           |
+| Quote removal                     | partial                                                      |
+| Alias / function resolution       | no (shell-time only)                                         |
 
 The CLI's view of "what runs" is therefore the **lexical token stream** as
-`shell-quote` sees it. Bash's view at execution time may legitimately differ —
+the inlined parser sees it. Bash's view at execution time may legitimately differ —
 for instance, `${ls,/}` is an undefined parameter expansion that bash would
 reject at execute-time but `shell-quote` may tokenise as `["${ls,/}"]`.
 
