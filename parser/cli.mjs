@@ -15,8 +15,18 @@ const shellQuote = require('./node_modules/shell-quote/index.js');
 
 const META_COMMANDS = new Set([
   'eval', 'source', '.', 'exec', 'command', 'builtin',
-  'bash', 'sh', 'zsh', 'dash',
+  'bash', 'sh', 'zsh', 'dash', 'ksh',
   'env', 'xargs', 'nohup', 'setsid', 'time', 'watch', 'coproc',
+  'parallel',
+]);
+
+// §10.5 Shell-keyword block list — compound-statement introducers. These are
+// not commands; they introduce control-flow blocks. Their presence in
+// command position means the input contains a compound statement, which the
+// gate must refuse since policy is per-command, not per-block.
+const SHELL_KEYWORDS = new Set([
+  'for', 'while', 'until', 'if', 'case', 'function', 'select',
+  'do', 'done', 'then', 'else', 'elif', 'fi', 'esac', 'in',
 ]);
 
 const ARGV_WRAPPER_SUBSTRINGS = ['$(', '`', '<<', '<(', "$'", '\\$\\('];
@@ -230,6 +240,19 @@ function checkVarAsCommand(commands) {
 }
 
 // ---------------------------------------------------------------------------
+// Shell-keyword basename block (§10.5)
+// ---------------------------------------------------------------------------
+
+function checkShellKeyword(commands) {
+  for (const cmd of commands) {
+    if (SHELL_KEYWORDS.has(cmd.basename)) {
+      return 'shell_keyword_' + cmd.basename;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Meta-command basename block (§10)
 // ---------------------------------------------------------------------------
 
@@ -381,6 +404,14 @@ async function main() {
   const varReject = checkVarAsCommand(commands);
   if (varReject) {
     emitReject(varReject, cleanCommands(commands));
+    return;
+  }
+
+  // §10.5 shell-keyword basename block (must run before meta-command so
+  // that compound-statement bodies surface as shell_keyword_<name>).
+  const keywordReject = checkShellKeyword(commands);
+  if (keywordReject) {
+    emitReject(keywordReject, cleanCommands(commands));
     return;
   }
 

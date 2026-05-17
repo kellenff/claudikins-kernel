@@ -1,0 +1,69 @@
+# Hook-scope bypass corpus — each non-comment line is a command string
+# that the parser correctly returns `verdict: "ok"` on (with `git`
+# surfacing as a basename in `commands[]`) but which the downstream hook
+# layer MUST reject because at least one of the surfaced basenames is
+# `git`. Used by tests/hooks/test-*.sh (Batch 4) for SC-2 (hook-level
+# rejection).
+#
+# These entries deliberately do NOT belong in the parser corpus: the
+# parser's job is purely lexical, and these inputs are syntactically
+# unobjectionable — the hostile intent lives in the basename pattern,
+# which is a policy concern not a parsing concern.
+#
+# Format: one entry per line. Lines beginning with `#` annotate the
+# *next* entry's category. Blank lines allowed for grouping. See
+# ./README.md for the contamination rule.
+#
+# Note: the unicode-homoglyph entries are intentionally retained here as
+# a documented limitation. Without Unicode normalisation (NFC/NFKC) the
+# hook cannot detect homoglyph substitution without a homoglyph table.
+# Deferred to a future plan; tests for these entries may be skipped or
+# marked xfail at the hook layer.
+
+# category: env-prefix
+GIT_DIR=/tmp git push
+FOO=1 BAR=2 git push
+GIT_SSH_COMMAND='ssh -i /tmp/k' git push
+PATH=/tmp:$PATH git push
+HOME=/tmp git push origin main
+
+# category: chained
+cd repo && git push
+false || git push
+git status; git push
+git status & git push
+true && false || git push
+
+# category: alias-style
+g\it push
+g"i"t push
+g${IFS}it push
+g''it push
+gi\t push
+
+# category: comment-newline
+echo ok # git\ngit push
+: # innocuous\ngit push
+ls # safe\ngit push origin main
+
+# category: line-continuation
+git\\\npush
+git \\\n push
+git\\\n push origin main
+git\\\npush --force
+
+# category: function-shadow-post
+git() { evilbin; }; git push
+git() { :; }; git push --force
+g() { git push; }; g
+
+# category: glob-in-command-position
+*git* push
+?it push
+g[i]t push
+g*t push
+
+# category: unicode-homoglyph
+ɡit push
+ɡit status
+gі̇t push

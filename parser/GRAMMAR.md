@@ -373,26 +373,26 @@ After env-strip and basename extraction, the basename is compared against the
 following block list. A match rejects the envelope with reason
 `meta_command_<name>` where `<name>` is the matched basename.
 
-**Block list (17 commands):**
+**Block list (19 commands):**
 
 ```
-eval, source, ., exec, command, builtin, bash, sh, zsh, dash,
-env, xargs, nohup, setsid, time, watch, coproc
+eval, source, ., exec, command, builtin, bash, sh, zsh, dash, ksh,
+env, xargs, parallel, nohup, setsid, time, watch, coproc
 ```
 
 ### Rationale per category
 
-| Category              | Commands                    | Why blocked                                                                                 |
-| --------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
-| Direct evaluators     | `eval`, `source`, `.`       | Execute arbitrary strings as shell code — total bypass of any static lexer.                 |
-| Process replacers     | `exec`                      | Replaces the shell process; subsequent argv tokens become an unconstrained new command.     |
-| Shell-builtin escapes | `command`, `builtin`        | Bypass alias/function resolution to invoke a raw builtin or external binary; gate-evasion.  |
-| Sub-shells            | `bash`, `sh`, `zsh`, `dash` | Spawn a fresh shell with a `-c` string we'd then need to re-parse. Out of scope.            |
-| Env-as-wrapper        | `env`                       | `env CMD args` lets the caller pick `CMD` after env-mutation; recursive parsing required.   |
-| Argument multipliers  | `xargs`                     | Reads stdin and constructs new command lines per item; impossible to lexically constrain.   |
-| Detachers             | `nohup`, `setsid`           | Wrap an inner command; we'd need to re-parse the wrapped command.                           |
-| Timers/wrappers       | `time`, `watch`             | Same wrapper pattern as `nohup` (`time CMD`, `watch CMD`); inner command must be re-parsed. |
-| Co-processes          | `coproc`                    | Starts a background co-process from a following command word; same wrapper concern.         |
+| Category              | Commands                           | Why blocked                                                                                                                                                                        |
+| --------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Direct evaluators     | `eval`, `source`, `.`              | Execute arbitrary strings as shell code — total bypass of any static lexer.                                                                                                        |
+| Process replacers     | `exec`                             | Replaces the shell process; subsequent argv tokens become an unconstrained new command.                                                                                            |
+| Shell-builtin escapes | `command`, `builtin`               | Bypass alias/function resolution to invoke a raw builtin or external binary; gate-evasion.                                                                                         |
+| Sub-shells            | `bash`, `sh`, `zsh`, `dash`, `ksh` | Spawn a fresh shell with a `-c` string we'd then need to re-parse. Out of scope.                                                                                                   |
+| Env-as-wrapper        | `env`                              | `env CMD args` lets the caller pick `CMD` after env-mutation; recursive parsing required.                                                                                          |
+| Argument multipliers  | `xargs`, `parallel`                | Read stdin / args and construct new command lines per item; impossible to lexically constrain. `parallel git ::: push` runs `git push` once the gate has waved `parallel` through. |
+| Detachers             | `nohup`, `setsid`                  | Wrap an inner command; we'd need to re-parse the wrapped command.                                                                                                                  |
+| Timers/wrappers       | `time`, `watch`                    | Same wrapper pattern as `nohup` (`time CMD`, `watch CMD`); inner command must be re-parsed.                                                                                        |
+| Co-processes          | `coproc`                           | Starts a background co-process from a following command word; same wrapper concern.                                                                                                |
 
 ### Examples
 
@@ -403,6 +403,54 @@ env, xargs, nohup, setsid, time, watch, coproc
 | `/bin/bash -c "..."` | `bash`    | `meta_command_bash`    |
 | `xargs -I{} rm {}`   | `xargs`   | `meta_command_xargs`   |
 | `command git push`   | `command` | `meta_command_command` |
+
+---
+
+## 10.5 Shell-keyword basename block list
+
+After env-strip and basename extraction, but **before** the meta-command
+check (§10), the basename is compared against a second block list: bash
+compound-statement keywords. A match rejects the envelope with reason
+`shell_keyword_<name>` where `<name>` is the matched basename.
+
+### Rationale
+
+These tokens are not commands; they are **compound-statement introducers**
+or block delimiters (`for`, `while`, `if`, `case`, `function`, `select`,
+`do`, `done`, `then`, `else`, `elif`, `fi`, `esac`, `in`). Their presence
+in command position implies the input contains a control-flow block — a
+`for` loop body, an `if` branch, a `function` definition that shadows a
+gated command. Per-command policy cannot model per-block intent: the gate
+must refuse to make a decision rather than wave through a body whose
+behaviour depends on the loop / branch / function it lives inside.
+
+`shell-quote` does not lex these as a distinct token shape — they arrive
+as ordinary string tokens. The walker therefore catches them at
+basename-comparison time, the same mechanism §10 uses for meta-commands.
+The shell-keyword check is ordered **before** the meta-command check so
+that a `for x in y; do ksh -c '...'; done` input surfaces as
+`shell_keyword_for` (the outermost violation), not `meta_command_ksh`.
+
+`time` is intentionally **not** in this set despite appearing in some
+bash grammars as a keyword — it is already covered by §10 as a
+meta-command (`time CMD` wraps an inner command, identically to `nohup`).
+
+**Block list (15 keywords):**
+
+```
+for, while, until, if, case, function, select,
+do, done, then, else, elif, fi, esac, in
+```
+
+### Examples
+
+| Command                               | Basename   | Verdict                  |
+| ------------------------------------- | ---------- | ------------------------ |
+| `for x in y; do git push; done`       | `for`      | `shell_keyword_for`      |
+| `while true; do git push; done`       | `while`    | `shell_keyword_while`    |
+| `if true; then git push; fi`          | `if`       | `shell_keyword_if`       |
+| `function git { evilbin; }; git push` | `function` | `shell_keyword_function` |
+| `case $x in y) git push;; esac`       | `case`     | `shell_keyword_case`     |
 
 ---
 
@@ -560,24 +608,36 @@ wrapper_form_subshell
 wrapper_form_proc_sub
 wrapper_form_ansi_c
 meta_command_<name>
+shell_keyword_<name>
 argv_wrapper_substring
 var_as_command
 no_commands
 malformed_input
 ```
 
-That is **11 schema-level values**. `meta_command_<name>` is parameterised:
-`<name>` is substituted with the matched basename, yielding one concrete
-string per entry in the §10 block list (17 entries → 17 concrete
-`meta_command_*` values: `meta_command_eval`, `meta_command_source`,
-`meta_command_.`, `meta_command_exec`, `meta_command_command`,
-`meta_command_builtin`, `meta_command_bash`, `meta_command_sh`,
-`meta_command_zsh`, `meta_command_dash`, `meta_command_env`,
-`meta_command_xargs`, `meta_command_nohup`, `meta_command_setsid`,
-`meta_command_time`, `meta_command_watch`, `meta_command_coproc`). All other
-values are literal strings. The enumerable total at the wire level is
-therefore **27 concrete reject_reason strings** (10 literals + 17
-parameterised expansions).
+That is **12 schema-level values**. Two of them are parameterised:
+
+- `meta_command_<name>` substitutes the matched basename, yielding one
+  concrete string per entry in the §10 block list (19 entries → 19 concrete
+  `meta_command_*` values: `meta_command_eval`, `meta_command_source`,
+  `meta_command_.`, `meta_command_exec`, `meta_command_command`,
+  `meta_command_builtin`, `meta_command_bash`, `meta_command_sh`,
+  `meta_command_zsh`, `meta_command_dash`, `meta_command_ksh`,
+  `meta_command_env`, `meta_command_xargs`, `meta_command_parallel`,
+  `meta_command_nohup`, `meta_command_setsid`, `meta_command_time`,
+  `meta_command_watch`, `meta_command_coproc`).
+- `shell_keyword_<name>` substitutes the matched basename, yielding one
+  concrete string per entry in the §10.5 block list (15 entries → 15
+  concrete `shell_keyword_*` values: `shell_keyword_for`,
+  `shell_keyword_while`, `shell_keyword_until`, `shell_keyword_if`,
+  `shell_keyword_case`, `shell_keyword_function`, `shell_keyword_select`,
+  `shell_keyword_do`, `shell_keyword_done`, `shell_keyword_then`,
+  `shell_keyword_else`, `shell_keyword_elif`, `shell_keyword_fi`,
+  `shell_keyword_esac`, `shell_keyword_in`).
+
+All other values are literal strings. The enumerable total at the wire
+level is therefore **44 concrete reject_reason strings** (10 literals + 19
+meta-command expansions + 15 shell-keyword expansions).
 
 As noted in the §9 "Reserved reject reasons" callout,
 `wrapper_form_backtick`, `wrapper_form_proc_sub`, and `wrapper_form_ansi_c`

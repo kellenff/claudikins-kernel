@@ -1,14 +1,22 @@
-# Bypass corpus — each non-comment line is a command string that MUST be
-# rejected by the parser/sanitiser. Format: one entry per line. Lines
-# beginning with `#` annotate the *next* entry's category. Blank lines
-# allowed for grouping. See ./README.md for the contamination rule.
-
-# category: env-prefix
-GIT_DIR=/tmp git push
-FOO=1 BAR=2 git push
-GIT_SSH_COMMAND='ssh -i /tmp/k' git push
-PATH=/tmp:$PATH git push
-HOME=/tmp git push origin main
+# Parser-scope bypass corpus — each non-comment line is a command string
+# that the parser CLI (parser/cli.mjs) MUST reject on its own, without help
+# from any downstream hook policy layer. Used by tests/cli-corpus-smoke.sh
+# for SC-1 (every entry → parser-level reject).
+#
+# Entries here exercise lexical bypass attempts: wrapper forms, command
+# substitution, here-docs, redirections, eval/source, var-as-command,
+# shell keywords (compound-statement introducers), and meta-command
+# basenames.
+#
+# Hook-scope bypasses (env prefixes, chained commands, alias-style
+# quoting, comment-newline tricks, line continuations, glob basenames,
+# unicode homoglyphs) live in bypass-corpus-hook.txt — for those, the
+# parser correctly surfaces `git` as a basename and the hook layer is
+# expected to do the blocking.
+#
+# Format: one entry per line. Lines beginning with `#` annotate the
+# *next* entry's category. Blank lines allowed for grouping. See
+# ./README.md for the contamination rule.
 
 # category: wrapper-shell
 bash -c "git push"
@@ -75,13 +83,6 @@ C=git; $C push
 C=git\n$C push
 ${GIT:-git} push
 
-# category: chained
-cd repo && git push
-false || git push
-git status; git push
-git status & git push
-true && false || git push
-
 # category: wrapper-bin
 time git push
 nohup git push
@@ -90,24 +91,6 @@ watch git push
 echo push | xargs git
 parallel git ::: push
 
-# category: alias-style
-g\it push
-g"i"t push
-g${IFS}it push
-g''it push
-gi\t push
-
-# category: comment-newline
-echo ok # git\ngit push
-: # innocuous\ngit push
-ls # safe\ngit push origin main
-
-# category: line-continuation
-git\\\npush
-git \\\n push
-git\\\n push origin main
-git\\\npush --force
-
 # category: standalone-subshell
 (git push)
 ( git status )
@@ -115,21 +98,7 @@ git\\\npush --force
 ( git push origin main )
 
 # category: function-shadow
-git() { evilbin; }; git push
 function git { evilbin; }; git status
-git() { :; }; git push --force
-g() { git push; }; g
-
-# category: glob-in-command-position
-*git* push
-?it push
-g[i]t push
-g*t push
-
-# category: unicode-homoglyph
-ɡit push
-ɡit status
-gі̇t push
 
 # category: compound-body
 for x in y; do git push; done
