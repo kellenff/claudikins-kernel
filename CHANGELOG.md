@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-17
+
+### Added
+
+- **Parser-backed gating hooks** — four hooks (`git-branch-guard.sh`, `block-git-commands.sh`, `merge-gate.sh`, `sanitize-bash.sh`) now route Bash command text through a Node.js + `shell-quote` parser CLI (`parser/cli.mjs`) instead of regex-on-raw-string matching. Closes the bypass class Klaus flagged where `$(echo "git merge X")`, `bash -c 'rm -rf /'`, and similar wrapper forms slipped past pattern-only gates.
+- `parser/GRAMMAR.md` — behavioural spec for the parser CLI (16 sections + §10.5 SHELL_KEYWORDS): JSON envelope schema, 19 meta-commands, 15 shell keywords, 12 reject_reason patterns, and recursive inner-shell parsing rules.
+- `parser/cli.mjs` — argv walker that emits `{version:1, verdict:"ok"|"reject", commands:[{basename, argv}], reject_reason?}`. Reads from stdin (preferred) or `CLAUDE_HOOK_INPUT` env var; exits 0 on any verdict, 1 only on internal CLI failure.
+- `parser/vendor/shell-quote@1.8.3` — vendored MIT-licensed tokeniser, no transitive deps. SHA-256 pinned in `parser/VENDORED.md`.
+- `tests/run.sh` — canonical test runner. Hard steps: shellcheck, parser unit tests (47), CLI corpus smoke (parser-bypass + allowlist), hook integration tests. Soft step: registry drift check.
+- `tests/fixtures/bypass-corpus-parser.txt` (61 entries) and `bypass-corpus-hook.txt` (32 entries) — split corpus distinguishing parser-layer rejections from hook-layer policy blocks.
+- `tools/check-shell-quote-version.sh` — optional drift check against npm registry with `--max-time` and binary preflight.
+- Latency baseline documented in CLAUDE.md: p95 < 150ms aggregate per Bash tool call (min 134.0 / p50 142.9 / p95 147.2 / p99 148.6 / mean 142.6 ms).
+
+### Changed
+
+- `hooks/git-branch-guard.sh` rewritten as parser-backed shim. Allowlist preserved verbatim (add/status/diff/log/show/ls-files/check-ignore/rev-parse/symbolic-ref/commit + `config --get/--list/--get-all/--get-regexp`). Walks all commands in a compound; rejects on any disallowed subcommand. Fail-closed on parser missing, crash, or malformed output.
+- `hooks/block-git-commands.sh` rewritten as parser-backed shim. Blocks any command-position basename `git` across compound forms, wrappers, and substitutions (babyclaude scope).
+- `hooks/merge-gate.sh` rewritten. Detects `git merge` via parser walker (including `cd repo && git merge X` and `bash -c 'git merge ...'`); verdict-file gate logic unchanged.
+- `hooks/sanitize-bash.sh` rewritten. JSON emission via `jq -n` (no string interpolation). `rm -rf` danger-path detection extended (`/`, `~`, `$HOME` across flag permutations `-r`, `-rf`, `-fr`, `-Rf`, `-fR`, `-rfR`, `-rRf`). `git commit` rewrite branch now emits `"decision":"approve"` (corrects the long-standing `"allow"` bug noted in CLAUDE.md).
+- Stdin > `CLAUDE_HOOK_INPUT` precedence harmonised across all four hooks.
+
+### Fixed
+
+- BSD-grep portability: parser-backed `merge-gate.sh` no longer relies on `rg -P` / `grep -P` PCRE shim — eliminates remaining macOS portability concerns.
+- Regex blind spots: chained merge detection (`cd repo && git merge X`), command substitution wrappers (`$(...)`, `` `...` ``), and `eval`/`bash -c`/`xargs` indirection are now caught structurally.
+
+### Security
+
+- Argv-level wrapper substring scan + SHELL_KEYWORDS rejection class closes the parser-bypass corpus that motivated this change (Klaus audit, 2026-05-16).
+
 ## [1.2.1] - 2026-05-16
 
 ### Fixed
