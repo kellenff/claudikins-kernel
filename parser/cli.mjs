@@ -87,7 +87,7 @@ function globPattern(tok) {
 }
 
 // ---------------------------------------------------------------------------
-// Env-prefix strip (§5) + basename (§6)
+// Env-prefix strip (§5)
 // ---------------------------------------------------------------------------
 
 function stripEnvPrefix(argv) {
@@ -96,18 +96,9 @@ function stripEnvPrefix(argv) {
   return argv.slice(i);
 }
 
-function basenameOf(token) {
-  return path.basename(token);
-}
-
 // ---------------------------------------------------------------------------
 // Walker (§4)
 // ---------------------------------------------------------------------------
-
-function splitOnNewline(str) {
-  // Split on literal '\n', preserving empty segments.
-  return str.split('\n');
-}
 
 // Walk tokens, return { commands, reject }
 function walk(tokens) {
@@ -123,8 +114,7 @@ function walk(tokens) {
       return;
     }
     const first = stripped[0];
-    const basename = basenameOf(first);
-    commands.push({ basename, argv: stripped, _firstTokenRaw: first });
+    commands.push({ basename: path.basename(first), argv: stripped, _firstTokenRaw: first });
     argv = [];
   }
 
@@ -181,7 +171,8 @@ function walk(tokens) {
     }
 
     if (isString(tok)) {
-      const segments = splitOnNewline(tok);
+      // Split on literal '\n', preserving empty segments.
+      const segments = tok.split('\n');
       if (segments.length === 1) {
         argv.push(tok);
       } else {
@@ -285,11 +276,11 @@ function readStdinWithTimeout(timeoutMs) {
     }
     let data = '';
     let totalBytes = 0;
-    let oversize = false;
     let done = false;
     const finish = (v) => {
       if (done) return;
       done = true;
+      clearTimeout(timer);
       process.stdin.removeAllListeners('data');
       process.stdin.removeAllListeners('end');
       process.stdin.removeAllListeners('error');
@@ -297,20 +288,16 @@ function readStdinWithTimeout(timeoutMs) {
     };
     const timer = setTimeout(() => finish(data), timeoutMs);
     process.stdin.on('data', (chunk) => {
-      if (oversize) return;
       totalBytes += chunk.length;
       if (totalBytes > STDIN_MAX_BYTES) {
-        oversize = true;
-        data = '<<oversize>>';  // sentinel guaranteed to fail JSON.parse
-        clearTimeout(timer);
         try { process.stdin.destroy(); } catch { /* ignore */ }
-        finish(data);
+        finish('<<oversize>>');  // sentinel guaranteed to fail JSON.parse
         return;
       }
       data += chunk.toString('utf8');
     });
-    process.stdin.on('end', () => { clearTimeout(timer); finish(data); });
-    process.stdin.on('error', () => { clearTimeout(timer); finish(data); });
+    process.stdin.on('end', () => finish(data));
+    process.stdin.on('error', () => finish(data));
   });
 }
 
