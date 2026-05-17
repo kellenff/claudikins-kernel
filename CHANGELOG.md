@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-17
+
 ### Changed
 
 - **Inlined `shell-quote` `parse` function; removed vendored package tree.** The `parser/node_modules/shell-quote/` vendored directory has been deleted. The single function the parser CLI actually uses (`parse`) is now inlined as an ES module at `parser/shell-quote-parse.mjs`. `parser/cli.mjs` imports it directly instead of resolving through `node_modules`.
