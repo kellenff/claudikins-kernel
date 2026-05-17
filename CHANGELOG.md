@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Inlined `shell-quote` `parse` function; removed vendored package tree.** The `parser/node_modules/shell-quote/` vendored directory has been deleted. The single function the parser CLI actually uses (`parse`) is now inlined as an ES module at `parser/shell-quote-parse.mjs`. `parser/cli.mjs` imports it directly instead of resolving through `node_modules`.
+- **Licence preserved.** The upstream MIT licence text is retained at `parser/LICENSES/shell-quote-MIT.txt` per the MIT licence's redistribution clause. Provenance attribution is also retained in the inlined source header.
+- **`parser/VENDORED.md` renamed to `parser/INLINED.md`** and rewritten to document the inlined model: SHA-256 of the inlined source, upstream commit reference, the rationale for inlining (eliminating `node_modules/` from the gating-hook hot path), and the update procedure if upstream `parse` changes.
+- **`tools/check-shell-quote-version.sh` rewritten with structural-diff normalisation (Klaus K7).** The drift check now strips comments, whitespace, and other cosmetic differences before comparing against the npm registry, suppressing false-positives that would otherwise fire on every benign upstream reformat.
+- **No runtime behaviour change.** All 47 parser unit tests, 87 CLI corpus smoke assertions, and 323 hook integration tests pass without modification. The parser CLI emits byte-identical verdicts for every input in `tests/fixtures/bypass-corpus-{parser,hook}.txt`.
+- **Hygiene goal of plan session `plan-2026-05-17-0650` is satisfied.** The associated perf goal (reducing Node startup overhead in the gating-hook chain) is deferred — see "Deferred work" below.
+
+#### Pre-change latency baseline (captured before inlining)
+
+Aggregate per-Bash-tool latency (sum of `git-branch-guard.sh` + `sanitize-bash.sh` + `merge-gate.sh`), 30-invocation sample on macOS Apple Silicon / Node 24, captured 2026-05-17 pre-inlining:
+
+| Metric | Value    |
+| ------ | -------- |
+| min    | 134.0 ms |
+| p50    | 142.9 ms |
+| p95    | 147.2 ms |
+| p99    | 148.6 ms |
+| max    | 148.6 ms |
+| mean   | 142.6 ms |
+
+### Deferred work
+
+- **Parser CLI perf port (Go via `mvdan.cc/sh/v3/syntax`).** Estimated ~3× speedup of the aggregate hook chain (~40-50 ms vs current ~143 ms p50). Out of scope for this release because the hygiene goal (eliminating `parser/node_modules/`) and the perf goal share no scaffolding. Re-visit by **2026-11-17** (see `<!-- TODO(perf): revisit Go port — review by 2026-11-17 -->` adjacent to CLAUDE.md's latency table). Plan reference: session `plan-2026-05-17-0650`, R-10.
+
 ## [1.3.0] - 2026-05-17
 
 ### Added
