@@ -4,10 +4,7 @@
 // for the behavioural specification. This file implements that spec.
 
 import path from 'node:path';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const shellQuote = require('./node_modules/shell-quote/index.js');
+import shellQuoteParse from './shell-quote-parse.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -367,7 +364,7 @@ async function main() {
 
   let tokens;
   try {
-    tokens = shellQuote.parse(env.command, (name) => '$' + name);
+    tokens = shellQuoteParse(env.command, (name) => '$' + name);
   } catch {
     // shell-quote throws on bad ${...} substitutions; treat as malformed input.
     emitReject('malformed_input', []);
